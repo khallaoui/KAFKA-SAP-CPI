@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard Big Data SAP - Kafka</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; padding: 25px; color: #1e293b; }
+        h1 { text-align: center; color: #0f172a; font-weight: 800; margin-bottom: 25px; }
+        
+        /* Grande zone d'affichage (Hero Bar) */
+        .hero-bar {
+            background: linear-gradient(135deg, #0f172a 0%, #2563eb 100%);
+            color: white;
+            padding: 35px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.2);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .hero-bar span { display: block; text-transform: uppercase; letter-spacing: 2px; font-size: 0.85rem; opacity: 0.75; margin-bottom: 5px; }
+        .hero-bar .order-id { font-size: 3rem; font-weight: 900; margin-bottom: 10px; letter-spacing: -1px; }
+        .hero-bar .meta-info { font-size: 1.4rem; font-weight: 400; opacity: 0.95; }
+        .hero-bar .meta-info strong { color: #60a5fa; }
+
+        /* Graphiques */
+        .charts-row { display: flex; gap: 25px; margin-bottom: 30px; }
+        .chart-card { background: white; padding: 20px; border-radius: 14px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); width: 50%; }
+        
+        /* Tableau */
+        .table-card { background: white; padding: 25px; border-radius: 14px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .table-card h3 { margin-top: 0; font-size: 1.25rem; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px; }
+        table { width: 100%; border-collapse: collapse; text-align: left; margin-top: 10px; }
+        th { background-color: #f8fafc; color: #64748b; padding: 14px; font-weight: 600; font-size: 0.9rem; border-bottom: 2px solid #e2e8f0; }
+        td { padding: 14px; border-bottom: 1px solid #f1f5f9; font-size: 0.95rem; }
+        tr:hover { background-color: #f8fafc; }
+        
+        /* Status Badges */
+        .status-badge { padding: 5px 10px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; }
+        .status-new { background-color: #dbeafe; color: #1e40af; }
+        .status-other { background-color: #fef08a; color: #854d0e; }
+    </style>
+</head>
+<body>
+
+    <h1> Suivi des Flux Temp Réel (ABAP Cloud ➔ CPI ➔ Kafka)</h1>
+    
+    <div class="hero-bar">
+        <span> DERNIER ÉVÉNEMENT TRANSMIS PAR LE CLIENT </span>
+        <div class="order-id" id="heroOrderId">En attente d'envoi ABAP...</div>
+        <div class="meta-info" id="heroMetaInfo">Veuillez déclencher une commande depuis votre application RAP.</div>
+    </div>
+
+    <div class="charts-row">
+        <div class="chart-card"><canvas id="clientChart"></canvas></div>
+        <div class="chart-card"><canvas id="statusChart"></canvas></div>
+    </div>
+
+    <div class="table-card">
+        <h3> Registre Complet des Commandes Reçues</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID Commande</th>
+                    <th>Client SAP</th>
+                    <th>Montant Total</th>
+                    <th>Devise</th>
+                    <th>Statut Kafka</th>
+                    <th>Offset Technique</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody">
+                <tr>
+                    <td colspan="6" style="text-align: center; color: #94a3b8;">Connexion au flux Confluent Cloud...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function initDashboard() {
+            try {
+                const response = await fetch('/api/orders-data');
+                const data = await response.json();
+
+                if (!data || data.length === 0) {
+                    document.getElementById('heroOrderId').innerText = "Aucun message";
+                    document.getElementById('tableBody').innerHTML = "<tr><td colspan='6' style='text-align:center;'>Topic vide</td></tr>";
+                    return;
+                }
+
+                // 1. MISE À JOUR DE LA GRANDE BARRE (Dernier message reçu)
+                const latest = data[data.length - 1];
+                document.getElementById('heroOrderId').innerText = latest.order_id;
+                document.getElementById('heroMetaInfo').innerHTML = 
+                    `Client : <strong>${latest.client_name}</strong> | Montant : <strong>${latest.amount.toFixed(2)} ${latest.currency}</strong> | Statut : <strong>${latest.status}</strong> | Offset : #<strong>${latest.offset}</strong>`;
+
+                // 2. MISE À JOUR DU TABLEAU DÉTAILLÉ (Plus récent en premier)
+                const tbody = document.getElementById('tableBody');
+                tbody.innerHTML = "";
+                
+                data.slice().reverse().forEach(order => {
+                    const tr = document.createElement('tr');
+                    const badgeStyle = order.status === 'NEW' ? 'status-new' : 'status-other';
+                    
+                    tr.innerHTML = `
+                        <td><strong>${order.order_id}</strong></td>
+                        <td>${order.client_name}</td>
+                        <td><strong>${order.amount.toFixed(2)}</strong></td>
+                        <td><span style="color: #64748b; font-weight:600;">${order.currency}</span></td>
+                        <td><span class="status-badge ${badgeStyle}">${order.status}</span></td>
+                        <td><code>#${order.offset}</code></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                // 3. LOGIQUE ET TRAITEMENT DES GRAPHIQUES
+                const clientsData = {};
+                const statusData = {};
+
+                data.forEach(order => {
+                    clientsData[order.client_name] = (clientsData[order.client_name] || 0) + order.amount;
+                    statusData[order.status] = (statusData[order.status] || 0) + 1;
+                });
+
+                // Graphique Camembert : CA par Client
+                new Chart(document.getElementById('clientChart'), {
+                    type: 'pie',
+                    data: {
+                        labels: Object.keys(clientsData),
+                        datasets: [{
+                            data: Object.values(clientsData),
+                            backgroundColor: ['#2563eb', '#10b981', '#f59e0b', '#ec4899', '#6366f1']
+                        }]
+                    },
+                    options: { plugins: { title: { display: true, text: 'Volume d\'Affaires par Client (MAD)', font: { size: 14, weight: 'bold' } } } }
+                });
+
+                // Graphique Barres : Répartition des Statuts
+                new Chart(document.getElementById('statusChart'), {
+                    type: 'bar',
+                    data: {
+                        labels: Object.keys(statusData),
+                        datasets: [{
+                            label: 'Nombre de commandes',
+                            data: Object.values(statusData),
+                            backgroundColor: '#0f172a',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: { plugins: { title: { display: true, text: 'État des Commandes dans le Flux', font: { size: 14, weight: 'bold' } } } }
+                });
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('heroOrderId').innerText = "Erreur Système";
+            }
+        }
+
+        initDashboard();
+    </script>
+</body>
+</html>
