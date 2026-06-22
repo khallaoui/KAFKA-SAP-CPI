@@ -1,0 +1,39 @@
+managed implementation in class zbp_i_orders unique;
+strict ( 2 );
+with draft;
+
+define behavior for ZI_ORDERS alias Order
+persistent table ztm_orders
+draft table ztm_orders_d
+lock master total etag local_last_changed
+authorization master ( global )
+etag master local_last_changed
+{
+  create;
+  update;
+  delete;
+
+  field ( numbering : managed, readonly ) order_uuid;
+  field ( readonly ) local_last_changed;
+
+  // Actions obligatoires pour la gestion du mode Draft Fiori Elements
+  draft action Edit;
+  draft action Activate optimized;
+  draft action Discard;
+  draft action Resume;
+  draft determine action Prepare { }
+
+  // Déclencheur de l'iFlow CPI / Kafka lors de la sauvegarde
+  determination order_created_event on save { create; }
+
+  mapping for ztm_orders
+  {
+    order_uuid = order_uuid;
+    order_id = order_id;
+    client_name = client_name;
+    amount = amount;
+    currency = currency;
+    status = status;
+    local_last_changed = local_last_changed;
+  }
+}
